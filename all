@@ -1,0 +1,344 @@
+А)
+from pymongo import MongoClient
+import pandas as pd
+from sqlalchemy import create_engine
+
+# Подключение к MongoDB
+mongo_uri = 'your_mongo_uri'
+client = MongoClient(mongo_uri)
+db = client['database_name']
+reviews_collection = db['reviews']
+
+# Извлечение отзывов из MongoDB
+reviews = list(reviews_collection.find())
+
+# Преобразование в DataFrame
+reviews_df = pd.DataFrame(reviews)
+
+# Очистка данных
+reviews_df.drop_duplicates(inplace=True)
+reviews_df.dropna(inplace=True)
+
+# Преобразование форматов данных
+reviews_df['date'] = pd.to_datetime(reviews_df['date'])
+
+# Подключение и извлечение данных из CSV
+hotel_descriptions = pd.read_csv('hotels.csv')
+
+# Объединение данных
+combined_data = pd.merge(reviews_df, hotel_descriptions, on='hotel_id', how='inner')
+
+# Создание целевой базы данных
+engine = create_engine('postgresql://username:password@host:port/dbname')
+
+# Загрузка данных в целевую базу данных
+combined_data.to_sql('combined_data', engine, if_exists='replace', index=False)
+
+# Обеспечение целостности данных
+# Пример проверки уникальности ключей
+assert combined_data['hotel_id'].is_unique
+Б)# Создание дашборда
+#Анализ лояльности туристов
+
+SQL############################
+SELECT region, AVG(rating) as avg_rating
+FROM combined_data
+GROUP BY region
+ORDER BY avg_rating DESC;
+############################
+
+############################
+#Инициативы по повышению привлекательности региона
+############################
+
+SQL############################
+SELECT initiative, COUNT(*) as count
+FROM combined_data
+WHERE feedback_type = 'suggestion'
+GROUP BY initiative
+ORDER BY count DESC;
+############################
+
+############################
+№Мотивы и интересы туристов
+############################
+
+SQL############################
+SELECT interest, COUNT(*) as count
+FROM combined_data
+GROUP BY interest
+ORDER BY count DESC;
+############################
+
+############################
+#Рейтинг различных локаций
+############################
+
+SQL############################
+SELECT location, AVG(rating) as avg_rating
+FROM combined_data
+GROUP BY location
+ORDER BY avg_rating DESC;
+Сравнение популярности локаций у туроператоров и туристов
+############################
+
+SQL############################
+SELECT location, 
+       SUM(CASE WHEN source = 'tour_operator' THEN 1 ELSE 0 END) as tour_operator_count,
+       SUM(CASE WHEN source = 'tourist' THEN 1 ELSE 0 END) as tourist_count
+FROM combined_data
+GROUP BY location;
+############################
+
+В)############################
+import pandas as pd
+import re
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from textblob import TextBlob
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import GridSearchCV
+
+# Загрузка данных
+reviews = pd.read_csv('reviews.csv')
+
+# Функция для очистки текста
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'\b\w{1,2}\b', '', text)
+    text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r'\d+', '', text)
+    text = ' '.join([word for word in word_tokenize(text) if word not in stopwords.words('english')])
+    return text
+
+# Применение функции очистки текста к отзывам
+reviews['cleaned_review'] = reviews['review'].apply(clean_text)
+
+# Исправление орфографических ошибок
+def correct_spelling(text):
+    return str(TextBlob(text).correct())
+
+reviews['corrected_review'] = reviews['cleaned_review'].apply(correct_spelling)
+
+# Дополнение набора дополнительными атрибутами
+def sentiment_analysis(text):
+    blob = TextBlob(text)
+    polarity = blob.sentiment.polarity
+    return polarity
+
+reviews['polarity'] = reviews['corrected_review'].apply(sentiment_analysis)
+
+# Разделение на положительные и отрицательные слова
+positive_words = set(['good', 'great', 'excellent', 'best', 'wonderful', 'amazing'])
+negative_words = set(['bad', 'terrible', 'worst', 'awful', 'poor'])
+
+def count_sentiment_words(text):
+    words = word_tokenize(text)
+    positive_count = len([word for word in words if word in positive_words])
+    negative_count = len([word for word in words if word in negative_words])
+    return positive_count, negative_count
+
+reviews['positive_count'], reviews['negative_count'] = zip(*reviews['corrected_review'].apply(count_sentiment_words))
+
+# Определение наиболее важных признаков и построение модели
+X = reviews[['polarity', 'positive_count', 'negative_count']]
+y = reviews['rating']
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+model = RandomForestClassifier(n_estimators=100, random_state=42)
+model.fit(X_train, y_train)
+
+# Оценка модели
+y_pred = model.predict(X_test)
+print(f'Accuracy: {accuracy_score(y_test, y_pred)}')
+print(classification_report(y_test, y_pred))
+
+# Оптимизация гиперпараметров
+param_grid = {
+    'n_estimators': [50, 100, 200],
+    'max_depth': [None, 10, 20, 30],
+    'min_samples_split': [2, 5, 10],
+    'min_samples_leaf': [1, 2, 4]
+}
+
+grid_search = GridSearchCV(estimator=model, param_grid=param_grid, cv=3, n_jobs=-1, verbose=2)
+grid_search.fit(X_train, y_train)
+
+print(f'Best parameters: {grid_search.best_params_}')
+best_model = grid_search.best_estimator_
+
+# Оценка оптимизированной модели
+y_pred_optimized = best_model.predict(X_test)
+print(f'Optimized Accuracy: {accuracy_score(y_test, y_pred_optimized)}')
+print(classification_report(y_test, y_pred_optimized))
+Г)############################
+ from pymongo import MongoClient
+import pandas as pd
+from sqlalchemy import create_engine
+import schedule
+import time
+import re
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+from textblob import TextBlob
+
+# Подключение к MongoDB
+def extract_reviews_from_mongodb():
+    mongo_uri = 'your_mongo_uri'
+    client = MongoClient(mongo_uri)
+    db = client['database_name']
+    reviews_collection = db['reviews']
+    reviews = list(reviews_collection.find())
+    return pd.DataFrame(reviews)
+
+# Подключение и извлечение данных из CSV
+def extract_hotel_descriptions_from_csv():
+    return pd.read_csv('hotels.csv')
+
+# Очистка данных
+def clean_reviews(reviews_df):
+    def clean_text(text):
+        text = text.lower()
+        text = re.sub(r'\b\w{1,2}\b', '', text)
+        text = re.sub(r'[^\w\s]', '', text)
+        text = re.sub(r'\d+', '', text)
+        text = ' '.join([word for word in word_tokenize(text) if word not in stopwords.words('english')])
+        return text
+
+    reviews_df['cleaned_review'] = reviews_df['review'].apply(clean_text)
+    
+    def correct_spelling(text):
+        return str(TextBlob(text).correct())
+
+    reviews_df['corrected_review'] = reviews_df['cleaned_review'].apply(correct_spelling)
+    
+    def sentiment_analysis(text):
+        blob = TextBlob(text)
+        polarity = blob.sentiment.polarity
+        return polarity
+
+    reviews_df['polarity'] = reviews_df['corrected_review'].apply(sentiment_analysis)
+    
+    positive_words = set(['good', 'great', 'excellent', 'best', 'wonderful', 'amazing'])
+    negative_words = set(['bad', 'terrible', 'worst', 'awful', 'poor'])
+
+    def count_sentiment_words(text):
+        words = word_tokenize(text)
+        positive_count = len([word for word in words if word in positive_words])
+        negative_count = len([word for word in words if word in negative_words])
+        return positive_count, negative_count
+
+    reviews_df['positive_count'], reviews_df['negative_count'] = zip(*reviews_df['corrected_review'].apply(count_sentiment_words))
+    
+    return reviews_df
+
+# Объединение данных
+def combine_data(reviews_df, hotel_descriptions):
+    return pd.merge(reviews_df, hotel_descriptions, on='hotel_id', how='inner')
+
+# Загрузка данных в хранилище
+def load_to_database(combined_data):
+    engine = create_engine('postgresql://username:password@host:port/dbname')
+    combined_data.to_sql('combined_data', engine, if_exists='replace', index=False)
+
+# Основная функция ETL
+def etl_process():
+    reviews, hotel_descriptions = extract_data()
+    combined_data = transform_data(reviews, hotel_descriptions)
+    load_data(combined_data)
+
+# Настройка задач
+schedule.every().hour.do(etl_process)
+
+while True:
+    schedule.run_pending()
+    time.sleep(1)
+############################
+#Автоматизация задач анализа данных
+############################
+def compute_key_metrics():
+    # Логика вычисления метрик
+    pass
+
+def generate_reports():
+    # Логика генерации отчетов
+    pass
+
+schedule.every().hour.do(compute_key_metrics)
+schedule.every().day.at("00:00").do(generate_reports)
+
+while True:
+    schedule.run_pending()
+    time.sleep(1)
+############################
+#Мониторинг и управление рабочими процессами
+############################
+def monitor_etl_process(process):
+    try:
+        process()
+    except Exception as e:
+        alert_admin()
+        raise e
+
+def alert_admin():
+    # Логика уведомления администратора
+    pass
+
+def etl_process_failed():
+    # Логика проверки, не провалился ли процесс ETL
+    return False
+
+def analysis_task_failed():
+    # Логика проверки, не провалилась ли задача анализа данных
+    return False
+
+def restart_task():
+    # Логика перезапуска задачи
+    pass
+
+# Мониторинг процессов
+setup_monitoring()
+
+def manage_processes():
+    if etl_process_failed():
+        alert_admin()
+    if analysis_task_failed():
+        restart_task()
+
+while True:
+    manage_processes()
+    time.sleep(60)
+############################
+#Система рекомендаций отелей
+############################
+from flask import Flask, request, jsonify
+import pandas as pd
+from sklearn.ensemble import RandomForestClassifier
+
+app = Flask(__name__)
+
+# Предварительно обученная модель
+model = RandomForestClassifier()
+model.load('hotel_recommendation_model.pkl')
+
+# Загрузка данных
+def load_data():
+    return pd.read_csv('user_preferences.csv')
+
+@app.route('/recommend', methods=['POST'])
+def recommend_hotels():
+    user_preferences = request.json
+    recommendations = generate_recommendations(user_preferences)
+    return jsonify(recommendations)
+
+def generate_recommendations(user_preferences):
+    data = load_data()
+    user_data = pd.DataFrame([user_preferences])
+    recommendations = model.predict(user_data)
+    return recommendations
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
